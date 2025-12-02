@@ -1,4 +1,4 @@
-# AI-DMS Platform
+# AI-Construction Takeoff Platform
 
 An enterprise-grade Document Management System powered by AI-based detection, automated data extraction, and a modular microservice-ready architecture.
 
