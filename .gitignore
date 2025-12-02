@@ -1,0 +1,89 @@
+# ===========================
+# GLOBAL
+# ===========================
+.DS_Store
+Thumbs.db
+*.log
+logs/
+*.tmp
+*.temp
+
+# Environment
+.env
+.env.*
+*.key
+*.pem
+
+# ===========================
+# FRONTEND (React)
+# ===========================
+node_modules/
+dist/
+build/
+.cache/
+.next/
+out/
+*.map
+
+# ===========================
+# BACKEND (Node.js + Mongo)
+# ===========================
+node_modules/
+dump/
+*.bson
+*.lock
+npm-debug.log*
+yarn-error.log*
+
+# ===========================
+# PYTHON (AI + Detection)
+# ===========================
+__pycache__/
+*.py[cod]
+*.pyo
+
+# virtual environments
+venv/
+.env/
+.venv/
+env/
+
+# python build
+build/
+dist/
+*.egg-info/
+
+# ai model artifacts
+models/
+weights/
+checkpoints/
+*.h5
+*.pt
+*.pth
+*.onnx
+*.joblib
+*.pickle
+
+# ===========================
+# TRAINING ASSETS
+# ===========================
+data/
+datasets/
+*.csv
+*.jsonl
+*.xml
+
+# ===========================
+# EDITOR / OS
+# ===========================
+.vscode/
+.idea/
+*.iml
+
+# ===========================
+# MISC
+# ===========================
+uploads/
+cache/
+temp/
+tmp/

@@ -1,0 +1,2 @@
+[console_scripts]
+osam = osam:__main__.cli

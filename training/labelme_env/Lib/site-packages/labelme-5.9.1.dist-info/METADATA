@@ -1,0 +1,32 @@
+Metadata-Version: 2.4
+Name: labelme
+Version: 5.9.1
+Summary: Image Polygonal Annotation with Python
+Author-email: Kentaro Wada <www.kentaro.wada@gmail.com>
+License: GPL-3.0-only
+License-File: LICENSE
+Classifier: Development Status :: 5 - Production/Stable
+Classifier: Intended Audience :: Developers
+Classifier: Intended Audience :: Science/Research
+Classifier: License :: OSI Approved :: GNU General Public License v3 (GPLv3)
+Classifier: Operating System :: OS Independent
+Classifier: Programming Language :: Python
+Classifier: Programming Language :: Python :: 3 :: Only
+Classifier: Programming Language :: Python :: 3.9
+Classifier: Programming Language :: Python :: 3.10
+Classifier: Programming Language :: Python :: 3.11
+Classifier: Programming Language :: Python :: 3.12
+Classifier: Programming Language :: Python :: 3.13
+Requires-Python: >=3.9
+Requires-Dist: imgviz
+Requires-Dist: loguru
+Requires-Dist: matplotlib
+Requires-Dist: natsort>=7.1.0
+Requires-Dist: numpy
+Requires-Dist: osam>=0.2.5
+Requires-Dist: pillow>=2.8
+Requires-Dist: pyqt5-qt5!=5.15.11,!=5.15.12,!=5.15.13,!=5.15.14,!=5.15.15,!=5.15.16; sys_platform == 'win32'
+Requires-Dist: pyqt5-qt5!=5.15.13; sys_platform == 'linux'
+Requires-Dist: pyqt5>=5.14.0
+Requires-Dist: pyyaml
+Requires-Dist: scikit-image

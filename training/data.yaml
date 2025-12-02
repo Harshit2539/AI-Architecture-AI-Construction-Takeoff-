@@ -1,0 +1,6 @@
+train: C:/Users/syste/Downloads/AI_Architecture - BCBP/training/data/images/train
+val: C:/Users/syste/Downloads/AI_Architecture - BCBP/training/data/images/train
+test: C:/Users/syste/Downloads/AI_Architecture - BCBP/training/data/images/train
+
+nc: 7
+names: ['room', 'wall', 'door', 'window', 'area', 'length', 'volume']
