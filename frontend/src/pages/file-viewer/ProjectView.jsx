@@ -22,8 +22,29 @@ const ProjectView = () => {
   const { projectId } = useParams();
   const webViewerInstanceRef = useRef(null);
 
+
+    const [showDropdown, setShowDropdown] = useState(false);
+      const [openModal, setOpenModal] = useState(false);
+        const [selectedClass, setSelectedClass] = useState("");
+          const [filteredData, setFilteredData] = useState([]);
+
+
+
+
   const apiUrl = import.meta.env.VITE_API_URL;
 
+
+    const boqData = [
+    { room: "Room 101", classRef: "FLOOR", divRef: "F1", subRef: "F1.1", description: "Vitrified Tile", unit: "m2", quantity: 45, rate: 850 },
+    { room: "Room 102", classRef: "WALL", divRef: "W1", subRef: "W1.1", description: "Emulsion Paint", unit: "m2", quantity: 60, rate: 120 },
+  ];
+
+  const handleClassChange = (e) => {
+    const value = e.target.value;
+    setSelectedClass(value);
+    const filtered = boqData.filter(item => item.classRef === value);
+    setFilteredData(filtered);
+  };
 
   useEffect(() => {
   const token = localStorage.getItem("token");
@@ -75,6 +96,131 @@ const ProjectView = () => {
       inst.setToolMode("AnnotationEdit");
     }
   };
+
+
+//   function Modal({ setOpenModal }) {
+//   return (
+//     <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+//       <div className="bg-gray-800 p-6 rounded-xl shadow-lg w-96 border border-gray-700">
+        
+//         {/* Modal Title */}
+//         <h2 className="text-white text-lg font-semibold mb-4">Add BOQ Item</h2>
+
+//         {/* Non-editable Input */}
+//         <input
+//           type="text"
+//           value="Selected Drawing Area"
+//           readOnly
+//           className="w-full p-2 bg-gray-700 text-gray-300 border border-gray-600 rounded-lg text-sm mb-3 cursor-not-allowed"
+//         />
+
+//         {/* Dropdown */}
+//         <select
+//           className="w-full p-2 bg-gray-700 text-white border border-gray-600 rounded-lg text-sm mb-4"
+//         >
+//           <option value="">Select BOQ Category</option>
+//           <option value="flooring">Flooring</option>
+//           <option value="painting">Painting</option>
+//           <option value="plastering">Plastering</option>
+//         </select>
+
+//         {/* Buttons */}
+//         <div className="flex justify-end space-x-2">
+//           <button
+//             onClick={() => setOpenModal(false)}
+//             className="px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-500"
+//           >
+//             Cancel
+//           </button>
+
+//           <button
+//             className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700"
+//           >
+//             Save
+//           </button>
+//         </div>
+//       </div>
+//     </div>
+//   );
+// }
+
+
+function Modal({ setOpenModal, boqData, selectedClass, handleClassChange, filteredData }) {
+  return (
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+      <div className="bg-gray-800 p-6 rounded-xl shadow-lg w-11/12 max-w-xl border border-gray-700">
+        <h2 className="text-white text-lg font-semibold mb-4">Add BOQ Item</h2>
+
+        {/* Dropdown for Class Ref */}
+
+                <label className="text-gray-300 text-sm mb-1 block">Area</label>
+        <input
+          type="text"
+          placeholder="Enter area (m²)"
+          className="w-full p-2 bg-gray-700 text-white border border-gray-600 rounded-lg text-sm mb-4"
+        />
+
+        {/* 🔹 Dropdown for Class Ref */}
+        <label className="text-gray-300 text-sm mb-1 block">Class Ref</label>
+        
+        <select
+          value={selectedClass}
+          onChange={handleClassChange}
+          className="w-full p-2 bg-gray-700 text-white border border-gray-600 rounded-lg text-sm mb-4"
+        >
+          <option value="">Select Class Ref</option>
+          <option value="FLOOR">FLOOR</option>
+          <option value="WALL">WALL</option>
+        </select>
+
+        {/* Display filtered data */}
+        {filteredData.length > 0 && (
+          <div className="overflow-x-auto max-h-60">
+            <table className="w-full text-sm text-left text-white">
+              <thead>
+                <tr className="border-b border-gray-600">
+                  <th className="px-2 py-1">Room</th>
+                  <th className="px-2 py-1">Div Ref</th>
+                  <th className="px-2 py-1">Sub Ref</th>
+                  <th className="px-2 py-1">Description</th>
+                  <th className="px-2 py-1">Unit</th>
+                  <th className="px-2 py-1">Quantity</th>
+                  <th className="px-2 py-1">Rate</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredData.map((item, idx) => (
+                  <tr key={idx} className="border-b border-gray-700">
+                    <td className="px-2 py-1">{item.room}</td>
+                    <td className="px-2 py-1">{item.divRef}</td>
+                    <td className="px-2 py-1">{item.subRef}</td>
+                    <td className="px-2 py-1">{item.description}</td>
+                    <td className="px-2 py-1">{item.unit}</td>
+                    <td className="px-2 py-1">{item.quantity}</td>
+                    <td className="px-2 py-1">{item.rate}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        <div className="flex justify-end space-x-2 mt-4">
+          <button
+            onClick={() => setOpenModal(false)}
+            className="px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-500"
+          >
+            Cancel
+          </button>
+          <button className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700">
+            Calculate Cost
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 
   const TopBarButton = ({ icon: Icon, label, onClick }) => (
     <button
@@ -165,12 +311,32 @@ const ProjectView = () => {
       </div>
 
       <div className="p-3 border-t border-gray-700">
-        <input
-          type="text"
-          placeholder="Search in opened pages"
-          className="w-full p-2 bg-gray-700 text-white border border-gray-600 rounded-lg text-sm focus:ring-indigo-500 focus:border-indigo-500"
-        />
-      </div>
+  <input
+    type="text"
+    placeholder="Search in opened pages"
+    className="w-full p-2 bg-gray-700 text-white border border-gray-600 rounded-lg text-sm focus:ring-indigo-500 focus:border-indigo-500"
+  />
+
+  {/* Button → open modal */}
+  <button
+    onClick={() => setOpenModal(true)}
+    className="w-full mt-3 p-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-sm font-medium"
+  >
+    Project BOQ
+  </button>
+
+  {/* Modal Component */}
+  {openModal && (
+    <Modal
+      setOpenModal={setOpenModal}
+      boqData={boqData}
+      selectedClass={selectedClass}
+      handleClassChange={handleClassChange}
+      filteredData={filteredData}
+    />
+  )}
+</div>
+     
     </aside>
   );
 

@@ -354,10 +354,8 @@
 
 # # Run with: uvicorn main:app --reload --port 8000
 
-
 # main.py
-import os, re, json, tempfile, traceback, hashlib, logging
-from datetime import datetime
+import os, re, json, tempfile, traceback, logging
 
 import fitz
 import numpy as np
@@ -365,11 +363,15 @@ import cv2
 from pdf2image import convert_from_path
 from shapely.geometry import Polygon, Point
 from ultralytics import YOLO
-
+import easyocr
+from PIL import Image
 from fastapi import FastAPI, File, UploadFile, Form
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
+# -------------------------------------------------
+# APP SETUP
+# -------------------------------------------------
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
@@ -383,144 +385,146 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-UPLOAD_DIR = os.path.join(BASE_DIR, "uploads")
-CACHE_DIR = os.path.join(BASE_DIR, "ml_cache")
-os.makedirs(UPLOAD_DIR, exist_ok=True)
-os.makedirs(CACHE_DIR, exist_ok=True)
+reader = easyocr.Reader(['en'], gpu=False)
 
-MODEL_PATH = os.path.join(BASE_DIR, "best.pt")
-PROJECT_ID = "TEMP_PROJECT"
-
-try:
-    model = YOLO(MODEL_PATH)
-    logger.info("Model loaded OK")
-except Exception as e:
-    logger.warning("YOLO model not loaded: %s", e)
-    model = None
-
-ML_RESULTS_STORE = {}
-
-
-def _safe_pdf_name(name: str):
-    base = os.path.basename(name)
-    return re.sub(r"[^0-9a-zA-Z_.-]", "_", base)
-
-
-def _cache_path(pdf_name: str, page_num: int):
-    safe = _safe_pdf_name(pdf_name)
-    return os.path.join(CACHE_DIR, f"{safe}_page{page_num}.json")
-
-
+# -------------------------------------------------
+# MODELS
+# -------------------------------------------------
 class ClickData(BaseModel):
     x: float
     y: float
     pageNum: int
     pdfPath: str
 
+# -------------------------------------------------
+# PATHS
+# -------------------------------------------------
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+CACHE_DIR = os.path.join(BASE_DIR, "ml_cache")
+DEBUG_DIR = os.path.join(BASE_DIR, "debug")
 
-# -------------------------------------------------------------------
-# AREA MULTIPLIERS (YOUR EXACT CUSTOM RULE)
-# -------------------------------------------------------------------
+os.makedirs(CACHE_DIR, exist_ok=True)
+os.makedirs(DEBUG_DIR, exist_ok=True)
+
+MODEL_PATH = os.path.join(BASE_DIR, "best.pt")
+
+# -------------------------------------------------
+# LOAD MODEL
+# -------------------------------------------------
+try:
+    model = YOLO(MODEL_PATH)
+    logger.info("YOLO model loaded")
+except Exception as e:
+    logger.error("YOLO load failed: %s", e)
+    model = None
+
+# -------------------------------------------------
+# HELPERS
+# -------------------------------------------------
+def _safe_pdf_name(name: str):
+    return re.sub(r"[^0-9a-zA-Z_.-]", "_", os.path.basename(name))
+
+def _cache_path(pdf_name: str, page_num: int):
+    return os.path.join(CACHE_DIR, f"{pdf_name}_page{page_num}.json")
+
+def polygon_norm_to_pdf(poly, pdf_w, pdf_h):
+    return [{"x": x * pdf_w, "y": y * pdf_h} for x, y in poly]
+
+def polygon_norm_to_image(poly, img_w, img_h):
+    return [{"x": x * img_w, "y": y * img_h} for x, y in poly]
+
 def get_scale_multiplier(scale: str):
-    scale = (scale or "").strip()
     if scale == "1:100":
         return 0.10
     if scale == "1:75":
         return 0.75
     try:
-        denom = float(scale.split(":")[1])
-        return (1.0 / denom) ** 2
+        return (1 / float(scale.split(":")[1])) ** 2
     except Exception:
         return 0.10
 
-
-# -------------------------------------------------------------------
-# ML ANALYZE (stores final real_area in cache)
-# -------------------------------------------------------------------
+# -------------------------------------------------
+# ML ANALYZE (FIXED MASK PIPELINE)
+# -------------------------------------------------
 @app.post("/ml-analyze-areas/")
 async def ml_analyze_areas(
     file: UploadFile = File(...),
     scale: str = Form("1:100"),
-    dpi: int = Form(300)
+    dpi: int = Form(300),
 ):
     if model is None:
         return {"status": "error", "message": "model not loaded"}
 
     scale_multiplier = get_scale_multiplier(scale)
 
-    tmp_path = None
-    pdf_doc = None
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+        tmp.write(await file.read())
+        tmp_path = tmp.name
+
     try:
-        # save upload to temp
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
-            tmp.write(await file.read())
-            tmp_path = tmp.name
-
-        # open pdf and render pages
-        pdf_doc = fitz.open(tmp_path)
+        pdf = fitz.open(tmp_path)
         pages = convert_from_path(tmp_path, dpi=dpi)
+        safe_pdf = _safe_pdf_name(file.filename)
 
-        safe_pdf = _safe_pdf_name(file.filename or tmp_path)
+        results = []
 
-        ML_RESULTS_STORE[PROJECT_ID] = {"scale": scale, "dpi": dpi, "pages": {}}
+        for idx, pil_img in enumerate(pages):
+            page_num = idx + 1
+            img = np.array(pil_img.convert("RGB"))
+            img_h, img_w = img.shape[:2]
 
-        out_pages = []
+            page = pdf[idx]
+            pdf_w, pdf_h = page.rect.width, page.rect.height
 
-        for i, pil_img in enumerate(pages):
-            page_num = i + 1
-            img_np = np.array(pil_img.convert("RGB"))
-            img_h, img_w = img_np.shape[:2]
-
-            page = pdf_doc[i]
-            pdf_w = page.rect.width
-            pdf_h = page.rect.height
-
-            # run model prediction
-            res = model.predict(img_np, conf=0.25, verbose=False)[0]
+            res = model.predict(img, conf=0.25, verbose=False)[0]
 
             regions = []
-            if hasattr(res, "masks") and res.masks:
-                orig_h, orig_w = res.orig_shape
-                sx = img_w / orig_w
-                sy = img_h / orig_h
 
-                for mask in res.masks.data:
-                    mask_np = (mask.cpu().numpy() > 0.5).astype(np.uint8) * 255
-                    contours, _ = cv2.findContours(mask_np, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-                    for cnt in contours:
-                        cnt = np.squeeze(cnt)
-                        if cnt.ndim != 2 or len(cnt) < 3:
-                            continue
+            # -------------------------------
+            # ✅ USE masks.xy (CORRECT SPACE)
+            # -------------------------------
+            if res.masks and res.masks.xy:
+                for poly_img in res.masks.xy:
+                    if len(poly_img) < 3:
+                        continue
 
-                        cnt = cnt.astype(float)
-                        cnt[:, 0] *= sx
-                        cnt[:, 1] *= sy
+                    poly_img = np.array(poly_img, dtype=float)
 
-                        approx = cv2.approxPolyDP(cnt.astype(np.float32), 1.5, True)
-                        approx = np.squeeze(approx) if approx is not None and len(approx) >= 3 else cnt
+                    # normalize
+                    poly_norm = poly_img.copy()
+                    poly_norm[:, 0] /= img_w
+                    poly_norm[:, 1] /= img_h
 
-                        pts_int = np.int32(approx)
-                        px_area = float(cv2.contourArea(pts_int))
+                    px_area = cv2.contourArea(poly_img.astype(np.int32))
+                    mm2 = px_area * (25.4 / dpi) ** 2
+                    real_area = mm2 * scale_multiplier / 1_000_000
 
-                        # normalize w.r.t rendered image (y measured from top)
-                        norm = approx.copy()
-                        norm[:, 0] /= float(img_w)
-                        norm[:, 1] /= float(img_h)
-                        centroid = norm.mean(axis=0).tolist()
+                    centroid = poly_norm.mean(axis=0).tolist()
 
-                        # pixel area -> mm^2 (using dpi)
-                        mm2 = px_area * (25.4 / dpi) ** 2
-                        # final real area in m^2 using your multiplier
-                        real_area = mm2 * scale_multiplier / 1_000_000.0
+                    regions.append({
+                        "polygon": poly_norm.tolist(),
+                        "pixel_area": px_area,
+                        "mm2": mm2,
+                        "real_area_m2": real_area,
+                        "centroid": centroid,
+                    })
 
-                        regions.append({
-                            "polygon": norm.tolist(),       # normalized to image dims; y from top
-                            "pixel_area": px_area,
-                            "mm2": mm2,
-                            "real_area_m2": real_area,
-                            "centroid": centroid
-                        })
+            # -------------------------------
+            # DEBUG OVERLAY (VALIDATION)
+            # -------------------------------
+            dbg = img.copy()
+            for r in regions:
+                pts = np.array(
+                    polygon_norm_to_image(r["polygon"], img_w, img_h),
+                    dtype=np.int32
+                )
+                pts = pts.reshape((-1, 1, 2))
+                cv2.polylines(dbg, [pts], True, (0, 255, 0), 2)
+
+            cv2.imwrite(
+                os.path.join(DEBUG_DIR, f"{safe_pdf}_page{page_num}.png"),
+                dbg
+            )
 
             cached = {
                 "page": page_num,
@@ -529,155 +533,486 @@ async def ml_analyze_areas(
                 "page_pdf_w": pdf_w,
                 "page_pdf_h": pdf_h,
                 "dpi": dpi,
-                "regions": regions
+                "regions": regions,
             }
 
-            with open(_cache_path(safe_pdf, page_num), "w", encoding="utf-8") as fh:
-                json.dump(cached, fh, indent=2)
+            with open(_cache_path(safe_pdf, page_num), "w") as f:
+                json.dump(cached, f, indent=2)
 
-            ML_RESULTS_STORE[PROJECT_ID]["pages"][page_num] = cached
-            out_pages.append({"page": page_num, "regions": regions})
+            results.append({"page": page_num, "regions": regions})
 
-        return {"status": "success", "scale": scale, "dpi": dpi, "pages": out_pages}
-
-    except Exception as ex:
-        logger.exception("ml error")
-        return {"status": "error", "message": str(ex), "trace": traceback.format_exc()}
+        return {"status": "success", "pages": results}
 
     finally:
-        # ensure pdf_doc closed before deleting tmp file
-        try:
-            if pdf_doc is not None:
-                try:
-                    pdf_doc.close()
-                except:
-                    pass
-        except:
-            pass
+        pdf.close()
+        os.remove(tmp_path)
 
-        if tmp_path and os.path.exists(tmp_path):
-            try:
-                os.remove(tmp_path)
-            except Exception:
-                logger.warning("Could not delete temp file (likely still locked): %s", tmp_path)
-
-
-# -------------------------------------------------------------------
+# -------------------------------------------------
 # MATCH CLICK
-# -------------------------------------------------------------------
+# -------------------------------------------------
 @app.post("/match-click/")
 def match_click(data: ClickData):
     try:
         safe_pdf = _safe_pdf_name(data.pdfPath)
-        cache_file = _cache_path(safe_pdf, data.pageNum)
+        cached = json.load(open(_cache_path(safe_pdf, data.pageNum)))
 
-        if not os.path.exists(cache_file):
-            return {"status": "error", "message": "ML not run"}
+        pdf_w, pdf_h = cached["page_pdf_w"], cached["page_pdf_h"]
+        img_w, img_h = cached["img_w"], cached["img_h"]
 
-        cached = json.load(open(cache_file, "r", encoding="utf-8"))
+        rx = data.x * (img_w / pdf_w)
+        ry = data.y * (img_h / pdf_h)
 
-        pdf_w = float(cached.get("page_pdf_w", 1.0))
-        pdf_h = float(cached.get("page_pdf_h", 1.0))
-        img_w = float(cached.get("img_w", pdf_w))
-        img_h = float(cached.get("img_h", pdf_h))
-
-        # Interpret provided coords (data.x/y) as PDF points.
-        # Convert PDF points -> rendered image coords:
-        rendered_x = float(data.x) * (img_w / pdf_w)
-        rendered_y = float(data.y) * (img_h / pdf_h)
-
-        # normalize for polygons (y measured from top)
-        nx = rendered_x / img_w
-        ny = rendered_y / img_h
-
+        nx, ny = rx / img_w, ry / img_h
         p = Point(nx, ny)
 
-        best = None
-        best_d = float("inf")
+        best, best_d = None, float("inf")
 
-        for r in cached.get("regions", []):
-            pts = r.get("polygon", [])
-            if not pts or len(pts) < 3:
-                continue
-            poly = Polygon(pts)
-            try:
-                if poly.is_valid and poly.contains(p):
-                    return {"status": "success", "region": r}
-            except Exception:
-                # continue trying nearest-centroid
-                pass
+        for r in cached["regions"]:
+            poly = Polygon(r["polygon"])
+            if poly.is_valid and poly.contains(p):
+                return {
+                    "status": "success",
+                    "region": {
+                        **r,
+                        "polygon_pdf": polygon_norm_to_pdf(r["polygon"], pdf_w, pdf_h),
+                        "polygon_image": polygon_norm_to_image(r["polygon"], img_w, img_h),
+                    },
+                }
 
-            cx, cy = r.get("centroid", [None, None])
-            if cx is None:
-                centroid = poly.centroid
-                cx, cy = centroid.x, centroid.y
+            cx, cy = r["centroid"]
             d = p.distance(Point(cx, cy))
             if d < best_d:
-                best_d = d
-                best = r
+                best_d, best = d, r
 
         if best:
-            return {"status": "success", "region": best, "distance": best_d}
-        return {"status": "not_found"}
-
-    except Exception as ex:
-        logger.exception("match-click error")
-        return {"status": "error", "message": str(ex), "trace": traceback.format_exc()}
-
-
-# -------------------------------------------------------------------
-# ANALYZE AREA
-# -------------------------------------------------------------------
-@app.post("/analyze_area")
-def analyze_area(data: ClickData):
-    try:
-        safe_pdf = _safe_pdf_name(data.pdfPath)
-        cache_file = _cache_path(safe_pdf, data.pageNum)
-
-        if not os.path.exists(cache_file):
-            return {"status": "error", "message": "ML not run"}
-
-        cached = json.load(open(cache_file, "r", encoding="utf-8"))
-
-        pdf_w = float(cached.get("page_pdf_w", 1.0))
-        pdf_h = float(cached.get("page_pdf_h", 1.0))
-        img_w = float(cached.get("img_w", pdf_w))
-        img_h = float(cached.get("img_h", pdf_h))
-
-        # Convert incoming PDF coords -> rendered image coordinates
-        rendered_x = float(data.x) * (img_w / pdf_w)
-        rendered_y = float(data.y) * (img_h / pdf_h)
-
-        nx = rendered_x / img_w
-        ny = rendered_y / img_h
-
-        p = Point(nx, ny)
-
-        for r in cached.get("regions", []):
-            poly = Polygon(r.get("polygon", []))
-            try:
-                if poly.is_valid and poly.contains(p):
-                    return {
-                        "status": "success",
-                        "area_m2": r.get("real_area_m2"),
-                        "area_mm2": r.get("mm2"),
-                        "region": r
-                    }
-            except Exception:
-                pass
+            return {
+                "status": "success",
+                "region": {
+                    **best,
+                    "polygon_pdf": polygon_norm_to_pdf(best["polygon"], pdf_w, pdf_h),
+                    "polygon_image": polygon_norm_to_image(best["polygon"], img_w, img_h),
+                },
+                "distance": best_d,
+            }
 
         return {"status": "not_found"}
 
-    except Exception as ex:
-        logger.exception("analyze_area error")
-        return {"status": "error", "message": str(ex), "trace": traceback.format_exc()}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
 
-
+# -------------------------------------------------
+# ROOT
+# -------------------------------------------------
 @app.get("/")
 def root():
     return {"status": "running", "model_loaded": model is not None}
 
-
+# -------------------------------------------------
+# ENTRY
+# -------------------------------------------------
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True)
+
+
+
+# this below code is the prev code all api working 
+
+
+
+# # main.py
+# import os, re, json, tempfile, traceback, hashlib, logging
+# from datetime import datetime
+
+# import fitz
+# import numpy as np
+# import cv2
+# from pdf2image import convert_from_path
+# from shapely.geometry import Polygon, Point
+# from ultralytics import YOLO
+# import easyocr #ye
+# from PIL import Image #ye
+# from fastapi import FastAPI, File, UploadFile, Form
+# from fastapi.middleware.cors import CORSMiddleware
+# from pydantic import BaseModel
+
+# logger = logging.getLogger(__name__)
+# logger.setLevel(logging.INFO)
+
+# app = FastAPI(title="Floorplan Analyzer API")
+
+# app.add_middleware(
+#     CORSMiddleware,
+#     allow_origins=["*"],
+#     allow_credentials=True,
+#     allow_methods=["*"],
+#     allow_headers=["*"],
+# )
+
+# reader = easyocr.Reader(['en'], gpu=False) #ye
+# class ClickData(BaseModel):
+#     x: float
+#     y: float
+#     pageNum: int
+#     pdfPath: str  
+
+# BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+# UPLOAD_DIR = os.path.join(BASE_DIR, "uploads")
+# CACHE_DIR = os.path.join(BASE_DIR, "ml_cache")
+# os.makedirs(UPLOAD_DIR, exist_ok=True)
+# os.makedirs(CACHE_DIR, exist_ok=True)
+
+# MODEL_PATH = os.path.join(BASE_DIR, "best.pt")
+# PROJECT_ID = "TEMP_PROJECT"
+
+# try:
+#     model = YOLO(MODEL_PATH)
+#     logger.info("Model loaded OK")
+# except Exception as e:
+#     logger.warning("YOLO model not loaded: %s", e)
+#     model = None
+
+# ML_RESULTS_STORE = {}
+
+
+# def _safe_pdf_name(name: str):
+#     base = os.path.basename(name)
+#     return re.sub(r"[^0-9a-zA-Z_.-]", "_", base)
+
+
+# def _cache_path(pdf_name: str, page_num: int):
+#     safe = _safe_pdf_name(pdf_name)
+#     return os.path.join(CACHE_DIR, f"{safe}_page{page_num}.json")
+
+
+# class ClickData(BaseModel):
+#     x: float
+#     y: float
+#     pageNum: int
+#     pdfPath: str
+
+
+# # -------------------------------------------------------------------
+# # AREA MULTIPLIERS (YOUR EXACT CUSTOM RULE)
+# # -------------------------------------------------------------------
+# def get_scale_multiplier(scale: str):
+#     scale = (scale or "").strip()
+#     if scale == "1:100":
+#         return 0.10
+#     if scale == "1:75":
+#         return 0.75
+#     try:
+#         denom = float(scale.split(":")[1])
+#         return (1.0 / denom) ** 2
+#     except Exception:
+#         return 0.10
+
+
+# # -------------------------------------------------------------------
+# # ML ANALYZE (stores final real_area in cache)
+# # -------------------------------------------------------------------
+# @app.post("/ml-analyze-areas/")
+# async def ml_analyze_areas(
+#     file: UploadFile = File(...),
+#     scale: str = Form("1:100"),
+#     dpi: int = Form(300)
+# ):
+#     if model is None:
+#         return {"status": "error", "message": "model not loaded"}
+
+#     scale_multiplier = get_scale_multiplier(scale)
+
+#     tmp_path = None
+#     pdf_doc = None
+#     try:
+#         # save upload to temp
+#         with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+#             tmp.write(await file.read())
+#             tmp_path = tmp.name
+
+#         # open pdf and render pages
+#         pdf_doc = fitz.open(tmp_path)
+#         pages = convert_from_path(tmp_path, dpi=dpi)
+
+#         safe_pdf = _safe_pdf_name(file.filename or tmp_path)
+
+#         ML_RESULTS_STORE[PROJECT_ID] = {"scale": scale, "dpi": dpi, "pages": {}}
+
+#         out_pages = []
+
+#         for i, pil_img in enumerate(pages):
+#             page_num = i + 1
+#             img_np = np.array(pil_img.convert("RGB"))
+#             img_h, img_w = img_np.shape[:2]
+
+#             page = pdf_doc[i]
+#             pdf_w = page.rect.width
+#             pdf_h = page.rect.height
+
+#             # run model prediction
+#             res = model.predict(img_np, conf=0.25, verbose=False)[0]
+
+#             regions = []
+#             if hasattr(res, "masks") and res.masks:
+#                 orig_h, orig_w = res.orig_shape
+#                 sx = img_w / orig_w
+#                 sy = img_h / orig_h
+
+#                 for mask in res.masks.data:
+#                     mask_np = (mask.cpu().numpy() > 0.5).astype(np.uint8) * 255
+#                     contours, _ = cv2.findContours(mask_np, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+#                     for cnt in contours:
+#                         cnt = np.squeeze(cnt)
+#                         if cnt.ndim != 2 or len(cnt) < 3:
+#                             continue
+
+#                         cnt = cnt.astype(float)
+#                         cnt[:, 0] *= sx
+#                         cnt[:, 1] *= sy
+
+#                         approx = cv2.approxPolyDP(cnt.astype(np.float32), 1.5, True)
+#                         approx = np.squeeze(approx) if approx is not None and len(approx) >= 3 else cnt
+
+#                         pts_int = np.int32(approx)
+#                         px_area = float(cv2.contourArea(pts_int))
+
+#                         # normalize w.r.t rendered image (y measured from top)
+#                         norm = approx.copy()
+#                         norm[:, 0] /= float(img_w)
+#                         norm[:, 1] /= float(img_h)
+#                         centroid = norm.mean(axis=0).tolist()
+
+#                         # pixel area -> mm^2 (using dpi)
+#                         mm2 = px_area * (25.4 / dpi) ** 2
+#                         # final real area in m^2 using your multiplier
+#                         real_area = mm2 * scale_multiplier / 1_000_000.0
+
+#                         regions.append({
+#                             "polygon": norm.tolist(),       # normalized to image dims; y from top
+#                             "pixel_area": px_area,
+#                             "mm2": mm2,
+#                             "real_area_m2": real_area,
+#                             "centroid": centroid
+#                         })
+
+#             cached = {
+#                 "page": page_num,
+#                 "img_w": img_w,
+#                 "img_h": img_h,
+#                 "page_pdf_w": pdf_w,
+#                 "page_pdf_h": pdf_h,
+#                 "dpi": dpi,
+#                 "regions": regions
+#             }
+
+#             with open(_cache_path(safe_pdf, page_num), "w", encoding="utf-8") as fh:
+#                 json.dump(cached, fh, indent=2)
+
+#             ML_RESULTS_STORE[PROJECT_ID]["pages"][page_num] = cached
+#             out_pages.append({"page": page_num, "regions": regions})
+
+#         return {"status": "success", "scale": scale, "dpi": dpi, "pages": out_pages}
+
+#     except Exception as ex:
+#         logger.exception("ml error")
+#         return {"status": "error", "message": str(ex), "trace": traceback.format_exc()}
+
+#     finally:
+#         # ensure pdf_doc closed before deleting tmp file
+#         try:
+#             if pdf_doc is not None:
+#                 try:
+#                     pdf_doc.close()
+#                 except:
+#                     pass
+#         except:
+#             pass
+
+#         if tmp_path and os.path.exists(tmp_path):
+#             try:
+#                 os.remove(tmp_path)
+#             except Exception:
+#                 logger.warning("Could not delete temp file (likely still locked): %s", tmp_path)
+
+
+
+
+
+# @app.post("/extract-scale/")
+# async def extract_scale(file: UploadFile = File(...)):
+#     tmp_path = None
+#     try:
+#         with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+#             tmp.write(await file.read())
+#             tmp_path = tmp.name
+
+#         scale = None
+
+#         text = ""
+#         with fitz.open(tmp_path) as doc:
+#             for page in doc:
+#                 text += page.get_text("text")
+        
+#         match = re.search(
+#             r"(?:scale\s*[@:]?\s*|@?\s*[A-Z0-9]+\s*)?(\d+\s*[:/]\s*\d+)",
+#             text,
+#             re.IGNORECASE
+#         )
+#         if match:
+#             scale = match.group(1).replace(" ", "")
+
+#         if not scale:
+#             pages = convert_from_path(tmp_path, first_page=1, last_page=3) 
+#             for page_img in pages:
+#                 w, h = page_img.size
+#                 page_img = page_img.resize((w // 2, h // 2), Image.Resampling.LANCZOS)
+
+#                 ocr_result = reader.readtext(np.array(page_img))
+#                 for _, text_detected, _ in ocr_result:
+#                     match = re.search(
+#                         r"(?:scale\s*[@:]?\s*|@?\s*[A-Z0-9]+\s*)?(\d+\s*[:/]\s*\d+)",
+#                         text_detected,
+#                         re.IGNORECASE
+#                     )
+#                     if match:
+#                         scale = match.group(1).replace(" ", "")
+#                         break
+#                 if scale:
+#                     break
+
+#         if scale:
+#             scale = scale.replace("4:", "1:") 
+#             scale = scale.replace("I:", "1:")
+#             scale = scale.replace("O:", "0:")
+
+#         if scale:
+#             return {"status": "success", "scale": scale}
+#         else:
+#             return {"status": "not_found", "message": "Scale not found in document"}
+
+#     except Exception as e:
+#         return {"status": "error", "message": str(e)}
+
+
+# # -------------------------------------------------------------------
+# # MATCH CLICK
+# # -------------------------------------------------------------------
+# @app.post("/match-click/")
+# def match_click(data: ClickData):
+#     try:
+#         safe_pdf = _safe_pdf_name(data.pdfPath)
+#         cache_file = _cache_path(safe_pdf, data.pageNum)
+
+#         if not os.path.exists(cache_file):
+#             return {"status": "error", "message": "ML not run"}
+
+#         cached = json.load(open(cache_file, "r", encoding="utf-8"))
+
+#         pdf_w = float(cached.get("page_pdf_w", 1.0))
+#         pdf_h = float(cached.get("page_pdf_h", 1.0))
+#         img_w = float(cached.get("img_w", pdf_w))
+#         img_h = float(cached.get("img_h", pdf_h))
+
+#         # Interpret provided coords (data.x/y) as PDF points.
+#         # Convert PDF points -> rendered image coords:
+#         rendered_x = float(data.x) * (img_w / pdf_w)
+#         rendered_y = float(data.y) * (img_h / pdf_h)
+
+#         # normalize for polygons (y measured from top)
+#         nx = rendered_x / img_w
+#         ny = rendered_y / img_h
+
+#         p = Point(nx, ny)
+
+#         best = None
+#         best_d = float("inf")
+
+#         for r in cached.get("regions", []):
+#             pts = r.get("polygon", [])
+#             if not pts or len(pts) < 3:
+#                 continue
+#             poly = Polygon(pts)
+#             try:
+#                 if poly.is_valid and poly.contains(p):
+#                     return {"status": "success", "region": r}
+#             except Exception:
+#                 # continue trying nearest-centroid
+#                 pass
+
+#             cx, cy = r.get("centroid", [None, None])
+#             if cx is None:
+#                 centroid = poly.centroid
+#                 cx, cy = centroid.x, centroid.y
+#             d = p.distance(Point(cx, cy))
+#             if d < best_d:
+#                 best_d = d
+#                 best = r
+
+#         if best:
+#             return {"status": "success", "region": best, "distance": best_d}
+#         return {"status": "not_found"}
+
+#     except Exception as ex:
+#         logger.exception("match-click error")
+#         return {"status": "error", "message": str(ex), "trace": traceback.format_exc()}
+
+
+# # -------------------------------------------------------------------
+# # ANALYZE AREA
+# # -------------------------------------------------------------------
+# @app.post("/analyze_area")
+# def analyze_area(data: ClickData):
+#     try:
+#         safe_pdf = _safe_pdf_name(data.pdfPath)
+#         cache_file = _cache_path(safe_pdf, data.pageNum)
+
+#         if not os.path.exists(cache_file):
+#             return {"status": "error", "message": "ML not run"}
+
+#         cached = json.load(open(cache_file, "r", encoding="utf-8"))
+
+#         pdf_w = float(cached.get("page_pdf_w", 1.0))
+#         pdf_h = float(cached.get("page_pdf_h", 1.0))
+#         img_w = float(cached.get("img_w", pdf_w))
+#         img_h = float(cached.get("img_h", pdf_h))
+
+#         # Convert incoming PDF coords -> rendered image coordinates
+#         rendered_x = float(data.x) * (img_w / pdf_w)
+#         rendered_y = float(data.y) * (img_h / pdf_h)
+
+#         nx = rendered_x / img_w
+#         ny = rendered_y / img_h
+
+#         p = Point(nx, ny)
+
+#         for r in cached.get("regions", []):
+#             poly = Polygon(r.get("polygon", []))
+#             try:
+#                 if poly.is_valid and poly.contains(p):
+#                     return {
+#                         "status": "success",
+#                         "area_m2": r.get("real_area_m2"),
+#                         "area_mm2": r.get("mm2"),
+#                         "region": r
+#                     }
+#             except Exception:
+#                 pass
+
+#         return {"status": "not_found"}
+
+#     except Exception as ex:
+#         logger.exception("analyze_area error")
+#         return {"status": "error", "message": str(ex), "trace": traceback.format_exc()}
+
+
+# @app.get("/")
+# def root():
+#     return {"status": "running", "model_loaded": model is not None}
+
+
+# if __name__ == "__main__":
+#     import uvicorn
+#     uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True)
+
+
+

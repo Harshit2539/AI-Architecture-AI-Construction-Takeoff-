@@ -1,227 +1,144 @@
-// const express = require("express");
-// const multer = require("multer");
-// const path = require("path");
-// const fs = require("fs");
-// const { sendFileToPython } = require("../utils/callPython");
-// const MasterBOQ = require("../models/MasterBOQ");
-// const BOQProject = require("../models/BOQProject");
-
-// const router = express.Router();
-// const upload = multer({ dest: "uploads/" });
-
-// // ensure upload dir exists
-// if (!fs.existsSync("uploads")) fs.mkdirSync("uploads");
-
-// // ✅ Upload Master BOQ → Python Parser
-// router.post("/upload-master", upload.single("file"), async (req, res) => {
-//   try {
-//     const filePath = path.join("uploads", req.file.filename);
-
-    
-//     const result = await sendFileToPython("/upload/master-boq/", filePath);
-
-//     if (!result || result.status !== "success")
-//       throw new Error("Python parse failed or returned invalid response");
-
-//     res.status(200).json({
-//       success: true,
-//       message: "Master BOQ uploaded successfully via Python",
-//       details: result,
-//     });
-//   } catch (err) {
-//     console.error("❌ Master BOQ upload failed:", err.message);
-//     res.status(500).json({ success: false, message: err.message });
-//   }
-// });
-
-// // Project upload route
-// router.post("/upload-project/:projectName", upload.single("file"), async (req, res) => {
-//   try {
-//     const filePath = path.join("uploads", req.file.filename);
-//     const projectName = req.params.projectName;
-
-//     const result = await sendFileToPython("/upload/project-boq/", filePath, {
-//       project_id: projectName, // ✅ changed key name
-//       uploaded_by: "frontend_user",
-//     });
-
-//     if (!result || result.status !== "success") {
-//       console.error("❌ Python Error:", result);
-//       throw new Error(result.message || "Python project parse failed");
-//     }
-
-//     res.status(200).json({
-//       success: true,
-//       message: "Project BOQ uploaded successfully via Python",
-//       details: result,
-//     });
-//   } catch (err) {
-//     console.error("❌ Project BOQ upload failed:", err.message);
-//     res.status(500).json({ success: false, message: err.message });
-//   }
-// });
-
-
-// // ✅ Fetch uploaded BOQs
-// router.get("/uploads", async (req, res) => {
-//   try {
-//     const master = await MasterBOQ.findOne({}, "uploaded_at").sort({ uploaded_at: -1 });
-//     const projects = await BOQProject.find({}, "project_name uploaded_by uploaded_at");
-
-//     const uploads = [];
-
-//     if (master) {
-//       uploads.push({
-//         type: "master",
-//         filename: "Master BOQ",
-//         uploaded_by: "Admin",
-//         uploaded_at: master.uploaded_at,
-//       });
-//     }
-
-//     projects.forEach((p) => {
-//       uploads.push({
-//         type: "project",
-//         filename: p.project_name,
-//         uploaded_by: p.uploaded_by,
-//         uploaded_at: p.uploaded_at,
-//       });
-//     });
-
-//     res.json(uploads);
-//   } catch (err) {
-//     console.error("❌ Fetch uploads failed:", err.message);
-//     res.status(500).json({ message: "Failed to fetch uploads" });
-//   }
-// });
-
-// module.exports = router;
-
+// routes/boqRoutes.js
 const express = require("express");
 const router = express.Router();
 const multer = require("multer");
 const path = require("path");
 const fs = require("fs");
-const axios = require("axios");
-const { sendFileToPython } = require("../utils/callPython");
+const xlsx = require("xlsx");
 
 const MasterBOQ = require("../models/MasterBOQ");
 const BOQProject = require("../models/BOQProject");
 
-// === SETUP UPLOAD DIRECTORY ===
+// === UPLOAD DIR ===
 const UPLOAD_DIR = path.join(__dirname, "../uploads");
 if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR);
 
-// === MULTER CONFIGURATION ===
+// Multer setup
 const storage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, UPLOAD_DIR),
   filename: (req, file, cb) => cb(null, Date.now() + "-" + file.originalname),
 });
 const upload = multer({ storage });
 
-// === ROUTES ===
-
-// 📥 GET UPLOAD HISTORY
+// GET uploads summary (for frontend)
 router.get("/uploads", async (req, res) => {
   try {
-    const masterUploads = await MasterBOQ.find({}, { uploaded_at: 1 }).sort({ uploaded_at: -1 }).limit(1);
-    const projectUploads = await BOQProject.find({}, { project_name: 1, uploaded_by: 1, uploaded_at: 1 })
-      .sort({ uploaded_at: -1 });
+    const master = await MasterBOQ.findOne({}, "uploaded_at").sort({ uploaded_at: -1 });
+    const projects = await BOQProject.find({}, "project_name uploaded_by uploaded_at").sort({ uploaded_at: -1 });
 
-    const uploads = [];
-    if (masterUploads.length > 0) {
-      uploads.push({
+    const data = [];
+    if (master) {
+      data.push({
         type: "master",
-        filename: "Master BOQ.xlsx",
+        filename: "Master BOQ",
         uploaded_by: "System",
-        uploaded_at: masterUploads[0].uploaded_at,
+        uploaded_at: master.uploaded_at,
       });
     }
 
-    projectUploads.forEach((proj) => {
-      uploads.push({
+    projects.forEach((p) =>
+      data.push({
         type: "project",
-        filename: proj.project_name,
-        uploaded_by: proj.uploaded_by || "-",
-        uploaded_at: proj.uploaded_at,
-      });
-    });
+        filename: p.project_name,
+        uploaded_by: p.uploaded_by || "-",
+        uploaded_at: p.uploaded_at,
+      })
+    );
 
-    res.json(uploads);
+    return res.json(data);
   } catch (err) {
     console.error("Error fetching uploads:", err);
-    res.status(500).json({ message: "Failed to fetch uploads" });
+    return res.status(500).json({ message: "Failed to fetch uploads" });
   }
 });
 
-// ✅ Master BOQ Upload
-router.post("/upload-master", async (req, res) => {
+// Upload Master BOQ - parse excel for simple classes (expect columns: class_ref, class_description)
+router.post("/upload-master", upload.single("file"), async (req, res) => {
   try {
-    if (!req.files || !req.files.file) {
-      return res.status(400).json({ message: "No file uploaded" });
+    if (!req.file) return res.status(400).json({ message: "No file uploaded" });
+    const filePath = path.join(UPLOAD_DIR, req.file.filename);
+
+    const workbook = xlsx.readFile(filePath);
+    const sheetName = workbook.SheetNames[0];
+    const sheet = workbook.Sheets[sheetName];
+    const rows = xlsx.utils.sheet_to_json(sheet, { defval: "" });
+
+    // Expect rows like: class_ref, class_description, div_ref, div_description, sub_ref, sub_description
+    const inserted = [];
+    for (const r of rows) {
+      const cls = {
+        class_ref: r.class_ref || r["Class Ref"] || r["Class"] || "",
+        class_description: r.class_description || r["Class Description"] || r["Description"] || "",
+        divisions: [],
+      };
+      // if division/subdivision info present, parse and push
+      if (r.div_ref || r.div_description || r.sub_ref || r.sub_description) {
+        const div = {
+          div_ref: r.div_ref || r["Div Ref"] || "",
+          div_description: r.div_description || r["Div Description"] || "",
+          subdivisions: [],
+        };
+        if (r.sub_ref || r.sub_description) {
+          div.subdivisions.push({
+            sub_ref: r.sub_ref || r["Sub Ref"] || "",
+            sub_description: r.sub_description || r["Sub Description"] || "",
+          });
+        }
+        cls.divisions.push(div);
+      }
+      const newCls = new MasterBOQ(cls);
+      await newCls.save();
+      inserted.push(newCls);
     }
 
-    const file = req.files.file;
-    const filePath = path.join(UPLOAD_DIR, `${Date.now()}-${file.name}`);
-    await file.mv(filePath); // move uploaded file to uploads dir
-
-    console.log("📄 Received Master BOQ:", filePath);
-
-    // Send to Python API
-    const result = await sendFileToPython("/upload/master-boq/", filePath);
-
-    if (result.status !== "success") {
-      console.error("⚠️ Python failed:", result);
-      return res.status(422).json({ message: "Python parsing failed", details: result });
-    }
-
-    // Save a reference entry in Mongo
-    const master = new MasterBOQ({
-      class_ref: "A",
-      class_description: "Master BOQ Upload",
-      divisions: [],
-      uploaded_at: new Date(),
-    });
-    await master.save();
-
-    res.json({
-      success: true,
-      message: "Master BOQ uploaded successfully",
-      details: result,
-    });
+    return res.status(200).json({ status: "success", inserted_count: inserted.length, inserted });
   } catch (err) {
-    console.error("❌ Upload master error:", err);
-    res.status(500).json({ message: "Upload master failed", error: err.message });
+    console.error("upload-master error:", err);
+    return res.status(500).json({ status: "error", message: err.message });
   }
 });
 
-// 📤 UPLOAD PROJECT BOQ
+// Upload Project BOQ - parse excel and store items
 router.post("/upload-project/:projectName", upload.single("file"), async (req, res) => {
   try {
+    const projectName = req.params.projectName || req.body.project_name;
     if (!req.file) return res.status(400).json({ message: "No file uploaded" });
 
     const filePath = path.join(UPLOAD_DIR, req.file.filename);
-    const projectName = req.params.projectName;
+    const workbook = xlsx.readFile(filePath);
+    const sheet = workbook.Sheets[workbook.SheetNames[0]];
+    const rows = xlsx.utils.sheet_to_json(sheet, { defval: "" });
 
-    console.log("📄 Received Project BOQ:", filePath);
+    // Map Excel columns to item model fields:
+    // Accept headers: Item No, Room Name, Category, Description, Unit, Quantity, Rate, Amount
+    const items = rows.map((r, idx) => {
+      const qty = Number(r.Quantity || r.quantity || r.Qty || 0) || 0;
+      const rate = Number(r.Rate || r.rate || 0) || 0;
+      const amount = Number(r.Amount || r.amount || (qty * rate)) || qty * rate;
 
-    const pythonRes = await axios.post(`http://127.0.0.1:8000/upload/project-boq/${projectName}`, { path: filePath });
+      return {
+        item_no: Number(r["Item No"] || r.item_no || r.ItemNo || (idx + 1)),
+        room_name: r["Room Name"] || r.room_name || r.room || "",
+        class_ref: r["Category"] || r.category || "",
+        item_description: r["Description"] || r.description || "",
+        unit: r["Unit"] || r.unit || "",
+        quantity: qty,
+        rate: rate,
+        amount: amount,
+      };
+    });
 
     const project = new BOQProject({
       project_name: projectName,
-      uploaded_by: req.user?.name || "Unknown",
-      items: [],
+      uploaded_by: req.body.uploaded_by || req.user?.name || "Unknown",
+      items,
     });
     await project.save();
 
-    res.json({
-      success: true,
-      message: "Project BOQ uploaded successfully via Python",
-      details: pythonRes.data,
-    });
+    return res.status(201).json({ status: "success", project_id: project._id, items_count: items.length });
   } catch (err) {
-    console.error("Upload project error:", err.message);
-    res.status(500).json({ message: "Upload project failed" });
+    console.error("upload-project error:", err);
+    return res.status(500).json({ status: "error", message: err.message });
   }
 });
 

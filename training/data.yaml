@@ -1,6 +1,13 @@
 train: C:/Users/syste/Downloads/AI_Architecture - BCBP/training/data/images/train
-val: C:/Users/syste/Downloads/AI_Architecture - BCBP/training/data/images/train
-test: C:/Users/syste/Downloads/AI_Architecture - BCBP/training/data/images/train
+val: C:/Users/syste/Downloads/AI_Architecture - BCBP/training/data/images/val
+test: C:/Users/syste/Downloads/AI_Architecture - BCBP/training/data/images/test
+nc: 3
+names: ['door', 'window', 'zone']
 
-nc: 7
-names: ['room', 'wall', 'door', 'window', 'area', 'length', 'volume']
+roboflow:
+  workspace: kovarthan
+  project: cad-drawings-6hqfp
+  version: 1
+  license: MIT
+  url: https://universe.roboflow.com/kovarthan/cad-drawings-6hqfp/dataset/1
+  

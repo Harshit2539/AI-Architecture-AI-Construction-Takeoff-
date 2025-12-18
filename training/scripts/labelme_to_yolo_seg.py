@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 from PIL import Image
 
-CLASSES = ["room"] 
+CLASSES = ['door', 'window', 'zone']
 
 for split in ["train", "val"]:
     img_dir = Path(f"data/images/{split}")

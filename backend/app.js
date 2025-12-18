@@ -63,6 +63,8 @@ app.use('/api/users', authMiddleware, userRoutes);
 app.use('/api/teams', teamRoutes);
 app.use("/api/projects", projectRoutes);
 app.use("/api/boq", boqRoutes);
+app.use("/uploads", express.static(path.join(__dirname, "uploads")));
+
 
 const mongoUri = process.env.MONGO_URI;
 mongoose.connect(mongoUri, {

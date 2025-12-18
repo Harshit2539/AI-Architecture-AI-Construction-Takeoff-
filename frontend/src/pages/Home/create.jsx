@@ -8,11 +8,57 @@ const Create = () => {
   const [shareWithCompany, setShareWithCompany] = useState(true);
   const [file, setFile] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [manualScaleLeft, setManualScaleLeft] = useState("");
+  const [manualScaleRight, setManualScaleRight] = useState("");
+  const [showScaleModal, setShowScaleModal] = useState(false);
   const navigate = useNavigate();
   const apiUrl = import.meta.env.VITE_API_URL;
   const pyApiUrl = import.meta.env.VITE_PYTHON_API_URL;
 
   const handleFileChange = (e) => setFile(e.target.files[0]);
+
+  const submitWithManualScale = async () => {
+
+    try{
+  const finalScale =  manualScaleLeft && manualScaleRight  ? `${manualScaleLeft}:${manualScaleRight}` 
+    : "Unknown";
+    const projectNameInput = document.getElementById("projectName").value;
+
+  const formData = new FormData();
+  formData.append("project_name", projectNameInput);
+  formData.append("share_with_company", shareWithCompany);
+  formData.append("file", file);
+  formData.append("scale", finalScale);
+  formData.append("user_id", localStorage.getItem("token"));
+
+  setLoading(true);
+
+  const response = await fetch(`${apiUrl}/api/projects/store`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${localStorage.getItem("token")}` },
+    body: formData,
+  });
+
+    const data = await response.json();
+      if (response.ok) {
+        toast.success(`Project created successfully!`);
+        setShowScaleModal(false);
+        setTimeout(() => navigate("/home"), 2000);
+      } else {
+        toast.error(data.message || "Something went wrong");
+      }
+     }
+     catch (error) {
+      console.error(error);
+      setLoading(false);
+       setShowScaleModal(false);
+      toast.error("Server error, please try again later.");
+    } finally {
+      setLoading(false);
+    }
+
+ 
+};
 
   const handleCreateProject = async () => {
     const projectNameInput = document.getElementById("projectName").value;
@@ -31,8 +77,14 @@ const Create = () => {
       });
 
       const scaleData = await scaleResponse.json();
+
       const scale = scaleData?.scale || "Unknown";
       setLoading(false);
+
+      if (scale === "Unknown") {
+        setShowScaleModal(true);
+        return;
+      }
 
       const formData = new FormData();
       formData.append("project_name", projectNameInput);
@@ -40,7 +92,7 @@ const Create = () => {
       formData.append("file", file);
       formData.append("scale", scale);
       formData.append("user_id", localStorage.getItem("token"));
-
+      setLoading(true);
       const response = await fetch(`${apiUrl}/api/projects/store`, {
         method: "POST",
         headers: { Authorization: `Bearer ${localStorage.getItem("token")}` },
@@ -58,6 +110,8 @@ const Create = () => {
       console.error(error);
       setLoading(false);
       toast.error("Server error, please try again later.");
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -73,6 +127,43 @@ const Create = () => {
           </div>
         </div>
       )}
+
+
+    {showScaleModal && (
+<div className="modal-overlay">
+  <div className="modal sexy-modal">
+    <h3>Scale Not Detected</h3>
+    <p>
+      The CAD file does not contain scale information.  
+      Please enter drawing scale.
+    </p>
+ <div className="d-flex gap-2 align-items-center">
+  <input
+    type="text"
+    placeholder="1"
+    value={manualScaleLeft}
+    onChange={(e) => setManualScaleLeft(e.target.value)}
+    className="modal-input scale-input"
+  />
+
+  <span className="scale-separator">:</span>
+
+  <input
+    type="text"
+    placeholder="100"
+    value={manualScaleRight}
+    onChange={(e) => setManualScaleRight(e.target.value)}
+    className="modal-input scale-input"
+  />
+</div>
+    
+
+     <button className="modal-btn" onClick={submitWithManualScale}>Submit</button>
+      <button className="modal-btn" onClick={() => setShowScaleModal(false)}>Cancel</button>
+  </div>
+</div>
+
+ )} 
 
       <ToastContainer
         position="top-right"

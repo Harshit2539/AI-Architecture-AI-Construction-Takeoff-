@@ -1,8 +1,27 @@
 import React, { useState, useEffect } from "react";
 import { Upload, FileSpreadsheet, Database, AlertCircle } from "lucide-react";
-import { jwtDecode } from "jwt-decode";
 import { ToastContainer, toast } from "react-toastify";
 import "react-toastify/dist/ReactToastify.css";
+
+// ---------- REPLACEMENT FOR jwt-decode PACKAGE ----------
+function jwtDecode(token) {
+  try {
+    const base64Url = token.split(".")[1];
+    const base64 = base64Url.replace(/-/g, "+").replace(/_/g, "/");
+    return JSON.parse(
+      decodeURIComponent(
+        atob(base64)
+          .split("")
+          .map((c) => "%" + ("00" + c.charCodeAt(0).toString(16)).slice(-2))
+          .join("")
+      )
+    );
+  } catch (e) {
+    console.error("Invalid JWT:", e);
+    return null;
+  }
+}
+// ----------------------------------------------------------
 
 const Assemblies = () => {
   const [userRole, setUserRole] = useState("");
@@ -11,19 +30,15 @@ const Assemblies = () => {
   const apiUrl = import.meta.env.VITE_API_URL;
   const token = localStorage.getItem("token");
 
-  // Decode JWT
   useEffect(() => {
     if (token) {
-      try {
-        const decoded = jwtDecode(token);
+      const decoded = jwtDecode(token);
+      if (decoded) {
         setUserRole(decoded.role?.toLowerCase() || "user");
-      } catch (err) {
-        console.error("Token invalid:", err);
       }
     }
   }, [token]);
 
-  // Fetch uploaded BOQs (master + project)
   const fetchUploads = async () => {
     try {
       const res = await fetch(`${apiUrl}/api/boq/uploads`, {
@@ -40,14 +55,15 @@ const Assemblies = () => {
     fetchUploads();
   }, []);
 
-  // Upload handler
   const handleUpload = async (file, type) => {
     if (!file) return toast.error("Select a file first!");
     const formData = new FormData();
     formData.append("file", file);
 
+    let projectName = null;
+
     if (type === "project") {
-      const projectName = prompt("Enter project name:");
+      projectName = prompt("Enter project name:");
       if (!projectName) return toast.error("Project name required");
       formData.append("project_name", projectName);
       formData.append("uploaded_by", "current_user");
@@ -58,22 +74,19 @@ const Assemblies = () => {
       const endpoint =
         type === "master"
           ? `${apiUrl}/api/boq/upload-master`
-          : `${apiUrl}/api/boq/upload-project/${projectName.replace(
-              /\s+/g,
-              "_"
-            )}`;
+          : `${apiUrl}/api/boq/upload-project/${projectName.replace(/\s+/g, "_")}`;
+
       const res = await fetch(endpoint, {
         method: "POST",
         headers: { Authorization: `Bearer ${token}` },
         body: formData,
       });
+
       const data = await res.json();
 
       if (res.ok) {
         toast.success(
-          `${
-            type === "master" ? "Master" : "Project"
-          } BOQ uploaded successfully`
+          `${type === "master" ? "Master" : "Project"} BOQ uploaded successfully`
         );
         fetchUploads();
       } else {
@@ -166,7 +179,6 @@ const Assemblies = () => {
   );
 };
 
-// Upload Card Component
 const UploadCard = ({
   title,
   description,

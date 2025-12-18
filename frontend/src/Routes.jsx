@@ -23,7 +23,7 @@ import UserManagement from "./pages/Home/UserManagement"
 import ProjectView from "pages/file-viewer/ProjectView";
 import ProtectedRoute from "./components/ProtectedRoute";
 import Layout from "./components/Layout";
-
+import PdfPage from "./pages/file-viewer/PdfPage";
 const Routes = () => {
   return (
     <BrowserRouter>
@@ -61,6 +61,7 @@ const Routes = () => {
             <Route path="profile" element={<Profile />} />
             <Route path="settings" element={<Settings />} />
             <Route path="project/:projectId" element={<ProjectView />} />
+            <Route path="/view-pdf" element={<PdfPage />} />
           </Route>
         </RouterRoutes>
       </ErrorBoundary>

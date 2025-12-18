@@ -1,4 +1,4 @@
-task: segment
+task: detect
 mode: train
 model: yolov8s-seg.pt
 data: data.yaml
@@ -13,7 +13,7 @@ cache: false
 device: cpu
 workers: 8
 project: runs/train
-name: floorplan-seg
+name: floorplan-det
 exist_ok: false
 pretrained: true
 optimizer: auto
@@ -104,4 +104,4 @@ erasing: 0.4
 crop_fraction: 1.0
 cfg: null
 tracker: botsort.yaml
-save_dir: runs\train\floorplan-seg
+save_dir: runs\train\floorplan-det

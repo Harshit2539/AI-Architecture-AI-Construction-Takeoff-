@@ -3,10 +3,126 @@ body {
   padding: 0;
   font-family: Inter;
 }
-
+ 
 * {
   box-sizing: border-box;
   line-height: normal;
   font-family: inherit;
   margin: unset;
 }
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  backdrop-filter: blur(6px);
+  background: rgba(0, 0, 0, 0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  animation: fadeIn 0.3s ease;
+}
+ 
+/* Glassmorphic neon modal */
+.sexy-modal {
+  background: rgba(15, 15, 15, 0.6);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  backdrop-filter: blur(14px);
+  box-shadow: 0 0 35px rgba(0, 255, 255, 0.25);
+  padding: 28px;
+  border-radius: 18px;
+  width: 380px;
+  color: #fff;
+  animation: popIn 0.35s ease;
+}
+ 
+.sexy-modal h3 {
+  margin: 0 0 10px;
+  font-size: 22px;
+  font-weight: 600;
+  text-align: center;
+}
+ 
+.sexy-modal p {
+  font-size: 14px;
+  opacity: 0.85;
+  margin-bottom: 20px;
+  text-align: center;
+}
+ 
+/* Input */
+.modal-input {
+  width: 100%;
+  padding: 12px 14px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 10px;
+  color: white;
+  font-size: 15px;
+  outline: none;
+  transition: 0.2s ease;
+}
+ 
+.modal-input:focus {
+  border-color: cyan;
+  box-shadow: 0 0 10px rgba(0, 255, 255, 0.4);
+}
+ 
+/* Button */
+.modal-btn {
+  width: 100%;
+  margin-top: 18px;
+  padding: 12px 0;
+  background: linear-gradient(135deg, #00f0ff, #0088ff);
+  border: none;
+  border-radius: 10px;
+  font-size: 16px;
+  font-weight: 600;
+  color: black;
+  cursor: pointer;
+  transition: 0.25s ease;
+}
+ 
+.modal-btn:hover {
+  filter: brightness(1.2);
+  transform: translateY(-2px);
+  box-shadow: 0 0 15px rgba(0, 255, 255, 0.4);
+}
+ 
+ 
+.d-flex {
+  display: flex;
+}
+ 
+.gap-2 {
+  gap: 10px;
+}
+ 
+.scale-input {
+  width: 70px;       /* so they don’t stretch full width */
+  text-align: center;
+}
+ 
+.scale-separator {
+  font-size: 20px;
+  color: white;
+  font-weight: bold;
+}
+ 
+ 
+ 
+ 
+/* Animations */
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+ 
+@keyframes popIn {
+  from { transform: scale(0.8); opacity: 0; }
+  to { transform: scale(1); opacity: 1; }
+}
+ 
+/* i am a developer and was looking for a freelance project somewhere. I called my friend in MBA if he knows eomeone who wants some office menetagemetn tool for his or her business, some website or some tech tool. She said she has a entrepreneruship adn innovation cell. Sh has many people there who want to start there own business aned need help with tech. she says if i can prepare a document for teh same(i am notsure if i just want to give a freelance service or just need to join them. so dont specify anything).   */

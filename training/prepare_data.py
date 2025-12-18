@@ -1,137 +1,104 @@
-# from pdf2image import convert_from_path
-# from pathlib import Path
-# import os, random, shutil, json
-# from PIL import Image
-
-# # ------------ CONFIG ------------
-# SRC_PDF_DIR = Path("pdfs")  # where raw pdfs live
-# IMG_OUT_DIR = Path("data/images")
-# VAL_RATIO = 0.15
-# CLASSES = ["room", "wall", "doors", "windows", "area", "length", "volume"]
-# # --------------------------------
-
-# # Step 1: Convert PDFs to PNGs
-# print("📄 Converting PDFs to images...")
-# IMG_OUT_DIR.mkdir(parents=True, exist_ok=True)
-# all_imgs = []
-
-# for pdf in SRC_PDF_DIR.glob("*.pdf"):
-#     pages = convert_from_path(pdf, dpi=300)
-#     for i, page in enumerate(pages):
-#         img_name = f"{pdf.stem}_p{i+1}.png"
-#         out_path = IMG_OUT_DIR / img_name
-#         page.save(out_path, "PNG")
-#         all_imgs.append(out_path)
-
-# random.shuffle(all_imgs)
-# n_val = int(len(all_imgs) * VAL_RATIO)
-# val_imgs = all_imgs[:n_val]
-# train_imgs = all_imgs[n_val:]
-
-# for split in ["train", "val"]:
-#     (IMG_OUT_DIR / split).mkdir(parents=True, exist_ok=True)
-
-# for img in train_imgs:
-#     shutil.move(str(img), f"data/images/train/{img.name}")
-
-# for img in val_imgs:
-#     shutil.move(str(img), f"data/images/val/{img.name}")
-
-# print(f"✅ Split complete: {len(train_imgs)} train, {len(val_imgs)} val")
-
-# # Step 2: Convert LabelMe JSON → YOLO format
-# print("🧠 Converting LabelMe annotations → YOLO format...")
-
-# for split in ["train", "val"]:
-#     img_dir = Path(f"data/images/{split}")
-#     label_dir = Path(f"data/labels/{split}")
-#     label_dir.mkdir(parents=True, exist_ok=True)
-
-#     for img_path in img_dir.glob("*.png"):
-#         json_path = img_path.with_suffix(".json")
-#         if not json_path.exists():
-#             continue
-
-#         data = json.load(open(json_path))
-#         w, h = Image.open(img_path).size
-#         lines = []
-
-#         for shape in data["shapes"]:
-#             label = shape["label"]
-#             if label not in CLASSES:
-#                 continue
-#             cls_id = CLASSES.index(label)
-#             pts = shape["points"]
-#             norm = []
-#             for (x, y) in pts:
-#                 norm.append(str(x / w))
-#                 norm.append(str(y / h))
-#             lines.append(f"{cls_id} " + " ".join(norm))
-
-#         txt_path = label_dir / f"{img_path.stem}.txt"
-#         with open(txt_path, "w") as f:
-#             f.write("\n".join(lines))
-
-# print("✅ JSON → YOLO label conversion done.")
-
-
 import json
+import random
+import shutil
 from pathlib import Path
+from pdf2image import convert_from_path
+from polygon_validator import is_valid_polygon
 from PIL import Image
 
-# Define your classes
-CLASSES = ["room", "wall", "door", "window", "area", "length", "volume"]
+# ---------------- CONFIG ----------------
+CLASSES = ["door", "window", "zone"]
+VAL_RATIO = 0.15
+TEST_RATIO = 0.10
 
-# Define paths
-DATA_DIR = Path("data")
-SPLITS = ["train", "val"]
+ROOT = Path(".")
+PDF_DIR = ROOT / "pdfs"
+IMG_DIR = ROOT / "data/images"
+LBL_DIR = ROOT / "data/labels"
 
-# Make sure label directories exist
-for split in SPLITS:
-    (DATA_DIR / "labels" / split).mkdir(parents=True, exist_ok=True)
+# ----------------------------------------
 
-print("🧠 Converting LabelMe JSON annotations → YOLOv8 segmentation format...")
+def ensure_dirs():
+    for split in ["train", "val", "test"]:
+        (IMG_DIR / split).mkdir(parents=True, exist_ok=True)
+        (LBL_DIR / split).mkdir(parents=True, exist_ok=True)
 
-for split in SPLITS:
-    img_dir = DATA_DIR / "images" / split
-    label_dir = DATA_DIR / "labels" / split
-    count = 0
+def pdf_to_images():
+    images = []
+    for pdf in PDF_DIR.glob("*.pdf"):
+        pages = convert_from_path(pdf, dpi=300)
+        for i, page in enumerate(pages):
+            img_name = f"{pdf.stem}_p{i+1}.png"
+            out = IMG_DIR / img_name
+            page.save(out, "PNG")
+            images.append(out)
+    return images
 
-    # Process all image types
-    for ext in ["*.jpg", "*.jpeg", "*.png"]:
-        for img_path in img_dir.glob(ext):
-            json_path = img_path.with_suffix(".json")
-            if not json_path.exists():
-                print(f"⚠️ No JSON found for {img_path.name}")
+def split_data(images):
+    random.shuffle(images)
+    n = len(images)
+    n_test = int(n * TEST_RATIO)
+    n_val = int(n * VAL_RATIO)
+
+    test = images[:n_test]
+    val = images[n_test:n_test + n_val]
+    train = images[n_test + n_val:]
+
+    return train, val, test
+
+def move_files(files, split):
+    for img in files:
+        json_file = img.with_suffix(".json")
+
+        shutil.move(str(img), IMG_DIR / split / img.name)
+        if json_file.exists():
+            shutil.move(str(json_file), IMG_DIR / split / json_file.name)
+
+def convert_labelme(split):
+    img_path = IMG_DIR / split
+    lbl_path = LBL_DIR / split
+
+    for img in img_path.glob("*.png"):
+        json_path = img.with_suffix(".json")
+        if not json_path.exists():
+            continue
+
+        data = json.load(open(json_path))
+        w, h = Image.open(img).size
+        lines = []
+
+        for shape in data["shapes"]:
+            if shape["label"] not in CLASSES:
                 continue
 
-            try:
-                data = json.load(open(json_path, "r"))
-                w, h = Image.open(img_path).size
-                lines = []
+            if not is_valid_polygon(shape["points"], w, h):
+                continue
 
-                for shape in data.get("shapes", []):
-                    label = shape.get("label")
-                    if label not in CLASSES:
-                        continue
+            cls = CLASSES.index(shape["label"])
+            coords = []
+            for x, y in shape["points"]:
+                coords.append(f"{x/w:.6f}")
+                coords.append(f"{y/h:.6f}")
 
-                    cls_id = CLASSES.index(label)
-                    pts = shape.get("points", [])
-                    norm = []
-                    for (x, y) in pts:
-                        norm.append(str(x / w))
-                        norm.append(str(y / h))
-                    lines.append(f"{cls_id} " + " ".join(norm))
+            lines.append(f"{cls} " + " ".join(coords))
 
-                if lines:
-                    txt_path = label_dir / f"{img_path.stem}.txt"
-                    with open(txt_path, "w") as f:
-                        f.write("\n".join(lines))
-                    count += 1
+        if lines:
+            with open(lbl_path / f"{img.stem}.txt", "w") as f:
+                f.write("\n".join(lines))
 
-            except Exception as e:
-                print(f"❌ Error processing {img_path.name}: {e}")
+def main():
+    ensure_dirs()
+    images = pdf_to_images()
+    train, val, test = split_data(images)
 
-    print(f"✅ {split}: Converted {count} annotations → YOLO format.")
+    move_files(train, "train")
+    move_files(val, "val")
+    move_files(test, "test")
 
-print("🎯 All done! Check your data/labels/{train,val} folders.")
+    for split in ["train", "val", "test"]:
+        convert_labelme(split)
+
+    print("✅ Data pipeline completed successfully.")
+
+if __name__ == "__main__":
+    main()
